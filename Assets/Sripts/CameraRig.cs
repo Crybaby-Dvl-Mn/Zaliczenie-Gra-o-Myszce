@@ -6,25 +6,28 @@ public class CameraRig : MonoBehaviour
     public Transform player;
     public Transform cameraSprintAnchor;
     public Renderer[] fadeRenderers;
-    public Camera cam; // referencja do Camera (jeúli puste ñ auto)
+    public Camera cam;
 
-    [Header("Parametry TPS")]
+    [Header("Parametry TPS (chÛd)")]
     public float tpsDistance = 4f;
     public float tpsHeight = 1.5f;
     public float mouseSensitivity = 3f;
-    [Tooltip("Maksymalny kπt patrzenia w gÛrÍ/dÛ≥ w TPS")]
-    public float tpsPitchLimit = 50f;
 
     [Header("FOV")]
     public float fovTPS = 50f;
     public float fovFPS = 40f;
-    [Tooltip("Jak szybko FOV zmienia siÍ miÍdzy trybami")]
     public float fovLerpSpeed = 5f;
 
     [Header("Przejúcie TPS -> FPS")]
     public float transitionSpeed = 5f;
     public float transitionDelay = 0.5f;
     public AnimationCurve fadeCurve = AnimationCurve.EaseInOut(0f, 1f, 1f, 0f);
+    [Tooltip("Odleg≥oúÊ od anchora, poniøej ktÛrej uznajemy, øe kamera dotar≥a")]
+    public float anchorArriveThreshold = 0.1f;
+
+    [Header("Anchor FPS ñ relatywny do wysokoúci collidera")]
+    public float anchorHeightRatio = 0.8f;
+    public float anchorHeightOffset = 0f;
 
     [Header("Head Bob")]
     public bool bobOnlyWhenSprinting = true;
@@ -39,10 +42,14 @@ public class CameraRig : MonoBehaviour
 
     public float CurrentYaw => currentYaw;
 
+    // Flaga: kamera dotar≥a do anchora FPS
+    public bool IsFPSReady { get; private set; }
+
     private float currentYaw;
     private float currentPitch = 20f;
     private float transitionTimer;
     private bool isInSprintView;
+    private bool isCrouching;
     private Material[] fadeMaterials;
 
     private float bobTimer;
@@ -50,6 +57,7 @@ public class CameraRig : MonoBehaviour
     private Vector3 bobOffset;
 
     private PlayerController playerController;
+    private CharacterController characterController;
 
     private bool isClimbing;
     private float climbStartYaw;
@@ -60,6 +68,7 @@ public class CameraRig : MonoBehaviour
         Cursor.visible = false;
 
         playerController = player.GetComponent<PlayerController>();
+        characterController = player.GetComponent<CharacterController>();
 
         if (cam == null)
             cam = GetComponent<Camera>();
@@ -104,66 +113,80 @@ public class CameraRig : MonoBehaviour
 
         currentYaw += mouseX;
 
-        if (isInSprintView)
+        if (isInSprintView || isCrouching)
         {
-            // FPS ñ ca≥kowita blokada pitcha (sztywno 0)
             currentPitch = 0f;
         }
         else
         {
-            // TPS ñ pe≥ny zakres ±tpsPitchLimit
             currentPitch -= mouseY;
-            currentPitch = Mathf.Clamp(currentPitch, -tpsPitchLimit, tpsPitchLimit);
+            currentPitch = Mathf.Clamp(currentPitch, -50f, 50f);
         }
     }
 
     void HandleCameraPosition()
     {
         bool shouldSprintView = playerController != null && playerController.IsSprintActive;
+        isCrouching = playerController != null && playerController.IsCrouching;
 
-        if (shouldSprintView && !isInSprintView)
+        if (shouldSprintView && !isCrouching && !isInSprintView)
         {
             transitionTimer += Time.deltaTime;
             if (transitionTimer >= transitionDelay)
                 isInSprintView = true;
         }
-        else if (!shouldSprintView)
+        else if (!shouldSprintView || isCrouching)
         {
             transitionTimer = 0f;
             isInSprintView = false;
         }
 
-        if (isInSprintView)
+        bool useFPS = isInSprintView || isCrouching;
+
+        if (useFPS)
         {
-            // FPS ñ kamera na anchorze, rotacja tylko yaw (pitch = 0)
-            transform.position = Vector3.Lerp(transform.position, cameraSprintAnchor.position, transitionSpeed * Time.deltaTime);
+            Vector3 anchorPos = GetAnchorPosition();
+            transform.position = Vector3.Lerp(transform.position, anchorPos, transitionSpeed * Time.deltaTime);
             transform.rotation = Quaternion.Euler(0f, currentYaw, 0f);
+
+            // Sprawdü, czy kamera dotar≥a do anchora
+            IsFPSReady = Vector3.Distance(transform.position, anchorPos) <= anchorArriveThreshold;
         }
         else
         {
-            // TPS ñ orbita wokÛ≥ gracza, pitch wp≥ywa na kπt pionowy orbity
+            // TPS (chÛd)
             Quaternion orbitRot = Quaternion.Euler(currentPitch, currentYaw, 0f);
             Vector3 offset = orbitRot * new Vector3(0f, 0f, -tpsDistance);
             Vector3 tpsPos = player.position + Vector3.up * tpsHeight + offset;
 
             transform.position = Vector3.Lerp(transform.position, tpsPos, transitionSpeed * 0.5f * Time.deltaTime);
 
-            // Kamera patrzy na gracza
             Vector3 lookTarget = player.position + Vector3.up * tpsHeight;
             Quaternion lookRot = Quaternion.LookRotation(lookTarget - transform.position);
             transform.rotation = Quaternion.Slerp(transform.rotation, lookRot, 8f * Time.deltaTime);
+
+            IsFPSReady = false;
         }
+    }
+
+    Vector3 GetAnchorPosition()
+    {
+        if (characterController == null)
+            return cameraSprintAnchor.position;
+
+        Vector3 basePos = cameraSprintAnchor.position;
+        float newY = player.position.y + (characterController.height * anchorHeightRatio) + anchorHeightOffset;
+
+        return new Vector3(basePos.x, newY, basePos.z);
     }
 
     void HandleFOV()
     {
         if (cam == null) return;
 
-        float targetFov = isInSprintView ? fovFPS : fovTPS;
+        float targetFov = (isInSprintView || isCrouching) ? fovFPS : fovTPS;
         cam.fieldOfView = Mathf.Lerp(cam.fieldOfView, targetFov, fovLerpSpeed * Time.deltaTime);
     }
-
-    // --- TRYB WSPINACZKI ---
 
     public void EnterClimbMode(Vector3 climbDirection)
     {
@@ -193,15 +216,22 @@ public class CameraRig : MonoBehaviour
 
     void HandleClimbPosition()
     {
-        transform.position = Vector3.Lerp(transform.position, cameraSprintAnchor.position, climbTransitionSpeed * Time.deltaTime);
+        Vector3 anchorPos = GetAnchorPosition();
+        transform.position = Vector3.Lerp(transform.position, anchorPos, climbTransitionSpeed * Time.deltaTime);
         transform.rotation = Quaternion.Euler(currentPitch, currentYaw, 0f);
+        IsFPSReady = true;
     }
-
-    // --- HEAD BOB ---
 
     void HandleHeadBob()
     {
         if (playerController == null) return;
+
+        if (isCrouching)
+        {
+            bobBlend = 0f;
+            bobOffset = Vector3.zero;
+            return;
+        }
 
         float horizontalSpeed = new Vector3(
             playerController.GetComponent<CharacterController>().velocity.x,
@@ -244,7 +274,7 @@ public class CameraRig : MonoBehaviour
         float normalized = Mathf.Clamp01(dist / tpsDistance);
         float alpha = fadeCurve.Evaluate(normalized);
 
-        if (isInSprintView)
+        if (isInSprintView || isCrouching)
             alpha = 0f;
 
         foreach (var mat in fadeMaterials)

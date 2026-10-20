@@ -8,8 +8,11 @@ public class EnemyAttack : MonoBehaviour
     public float attackCooldown = 1.5f;
 
     [Header("Og³uszenie po ataku")]
-    [Tooltip("Ile sekund przeciwnik stoi w miejscu po zadaniu obra¿eñ")]
     public float attackStunDuration = 10f;
+
+    [Header("Blokada ataku podczas animacji gracza")]
+    [Tooltip("Czy nie atakowaæ, gdy gracz jest w animacji (np. wspinaczka)")]
+    public bool blockAttackDuringPlayerAnim = true;
 
     public bool IsStunned { get; private set; }
 
@@ -18,6 +21,7 @@ public class EnemyAttack : MonoBehaviour
 
     private PlayerHealth playerHealth;
     private Transform player;
+    private ClimbController climbController;
 
     void Start()
     {
@@ -26,19 +30,21 @@ public class EnemyAttack : MonoBehaviour
         {
             player = playerObj.transform;
             playerHealth = playerObj.GetComponent<PlayerHealth>();
+            climbController = playerObj.GetComponent<ClimbController>();
         }
     }
 
     void Update()
     {
-        // Sprawdzenie koñca og³uszenia
         if (IsStunned && Time.time >= stunEndTime)
-        {
             IsStunned = false;
-        }
 
         if (player == null || playerHealth == null) return;
         if (IsStunned) return;
+
+        // Blokada ataku podczas animacji gracza
+        if (blockAttackDuringPlayerAnim && climbController != null && climbController.IsClimbing)
+            return;
 
         float dist = Vector3.Distance(transform.position, player.position);
         if (dist <= attackRange && Time.time - lastAttackTime >= attackCooldown)
@@ -46,7 +52,6 @@ public class EnemyAttack : MonoBehaviour
             lastAttackTime = Time.time;
             playerHealth.TakeDamage(attackDamage);
 
-            // Og³uszenie
             IsStunned = true;
             stunEndTime = Time.time + attackStunDuration;
         }

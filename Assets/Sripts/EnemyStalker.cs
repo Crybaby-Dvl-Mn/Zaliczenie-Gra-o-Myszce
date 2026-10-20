@@ -25,27 +25,36 @@ public class EnemyStalker : MonoBehaviour
     public float chaseSpeed = 5.5f;
     public float chaseGiveUpRadius = 20f;
 
+    [Header("OpóŸnienie wejœcia w Chase")]
+    [Tooltip("Ile sekund przeciwnik stoi w miejscu po wykryciu gracza, zanim zacznie biec")]
+    public float chaseWindupTime = 5f;
+
     [Header("Prêdkoœci – investigate")]
     public float investigateWalkSpeed = 2.5f;
     public float investigateRunSpeed = 5f;
 
     [Header("Strefy zakazane")]
-    [Tooltip("Jak blisko granicy strefy ma siê zatrzymaæ przeciwnik (m)")]
     public float forbiddenZoneMargin = 1.5f;
+
+    [Header("Spowolnienie podczas animacji gracza")]
+    public float playerAnimSlowMultiplier = 0.3f;
 
     private NavMeshAgent agent;
     private Transform player;
     private PlayerController playerController;
+    private ClimbController climbController;
     private EnemyAttack enemyAttack;
     private List<ForbiddenZone> forbiddenZones = new List<ForbiddenZone>();
 
-    public enum State { Patrol, Investigate, Chase, Search, BlockedByZone }
+    public enum State { Patrol, Investigate, Chase, ChaseWindup, Search, BlockedByZone }
     public State CurrentState { get; private set; } = State.Patrol;
 
     private Vector3 lastKnownPlayerPos;
     private float stateTimer;
     private float investigateDuration;
     private Vector3 investigateTarget;
+
+    private float chaseWindupTimer;
 
     void Start()
     {
@@ -57,9 +66,9 @@ public class EnemyStalker : MonoBehaviour
         {
             player = playerObj.transform;
             playerController = playerObj.GetComponent<PlayerController>();
+            climbController = playerObj.GetComponent<ClimbController>();
         }
 
-        // ZnajdŸ wszystkie strefy zakazane w scenie
         forbiddenZones.Clear();
         forbiddenZones.AddRange(FindObjectsByType<ForbiddenZone>(FindObjectsSortMode.None));
 
@@ -71,7 +80,7 @@ public class EnemyStalker : MonoBehaviour
     {
         if (player == null) return;
 
-        // OG£USZENIE – stój w miejscu
+        // OG£USZENIE
         if (enemyAttack != null && enemyAttack.IsStunned)
         {
             if (agent.hasPath) agent.ResetPath();
@@ -80,20 +89,19 @@ public class EnemyStalker : MonoBehaviour
 
         float distToPlayer = Vector3.Distance(transform.position, player.position);
 
-        // STREFA ZAKAZANA – jeœli gracz w strefie, przeciwnik nie œciga
+        ApplySpeedMultiplier();
+
         bool playerInForbidden = IsPointInAnyZone(player.position);
 
         if (playerInForbidden)
         {
-            // Zatrzymaj siê, jeœli próbujesz wejœæ w strefê lub œcigaæ gracza w strefie
-            if (CurrentState == State.Chase || CurrentState == State.Investigate)
+            if (CurrentState == State.Chase || CurrentState == State.ChaseWindup || CurrentState == State.Investigate)
             {
                 CurrentState = State.BlockedByZone;
                 if (agent.hasPath) agent.ResetPath();
             }
             else if (CurrentState == State.Patrol)
             {
-                // Kontynuuj patrol, ale nie wchodŸ w strefy
                 if (agent.hasPath && IsPointInAnyZone(agent.destination))
                 {
                     if (agent.hasPath) agent.ResetPath();
@@ -102,15 +110,11 @@ public class EnemyStalker : MonoBehaviour
                 }
             }
 
-            // W stanie BlockedByZone – stój i czekaj
             if (CurrentState == State.BlockedByZone)
-            {
                 return;
-            }
         }
         else
         {
-            // Gracz poza stref¹ – wyjdŸ z BlockedByZone
             if (CurrentState == State.BlockedByZone)
             {
                 CurrentState = State.Patrol;
@@ -119,14 +123,16 @@ public class EnemyStalker : MonoBehaviour
             }
         }
 
-        // CHASE – ponad wszystko, ale nie jeœli gracz w strefie
-        if (!playerInForbidden && distToPlayer <= chaseRadius && CurrentState != State.Chase)
+        // Detekcja Chase
+        if (!playerInForbidden && distToPlayer <= chaseRadius &&
+            CurrentState != State.Chase && CurrentState != State.ChaseWindup)
         {
-            EnterChase();
+            EnterChaseWindup();
         }
 
-        // ZAPACH – tylko jeœli gracz poza stref¹
-        if (!playerInForbidden && CurrentState != State.Chase && distToPlayer <= smellRadius)
+        // Zapach
+        if (!playerInForbidden && CurrentState != State.Chase && CurrentState != State.ChaseWindup &&
+            distToPlayer <= smellRadius)
         {
             lastKnownPlayerPos = player.position;
             if (CurrentState != State.Investigate || investigateTarget != player.position)
@@ -140,36 +146,67 @@ public class EnemyStalker : MonoBehaviour
             case State.Patrol: UpdatePatrol(); break;
             case State.Investigate: UpdateInvestigate(); break;
             case State.Chase: UpdateChase(); break;
+            case State.ChaseWindup: UpdateChaseWindup(); break;
             case State.Search: UpdateSearch(); break;
-            case State.BlockedByZone: /* stoi, nic nie robi */ break;
+            case State.BlockedByZone: break;
         }
     }
 
-    // --- SPRAWDZANIE STREF ---
+    // --- CHASE WINDUP (5 s stania przed biegiem) ---
+
+    void EnterChaseWindup()
+    {
+        CurrentState = State.ChaseWindup;
+        chaseWindupTimer = chaseWindupTime;
+        if (agent.hasPath) agent.ResetPath();
+    }
+
+    void UpdateChaseWindup()
+    {
+        chaseWindupTimer -= Time.deltaTime;
+
+        // Przeciwnik stoi w miejscu, ale patrzy na gracza
+        Vector3 lookTarget = new Vector3(player.position.x, transform.position.y, player.position.z);
+        if (lookTarget != transform.position)
+        {
+            Quaternion lookRot = Quaternion.LookRotation(lookTarget - transform.position);
+            transform.rotation = Quaternion.Slerp(transform.rotation, lookRot, 5f * Time.deltaTime);
+        }
+
+        if (chaseWindupTimer <= 0f)
+        {
+            CurrentState = State.Chase;
+        }
+    }
+
+    // --- SPOWOLNIENIE ---
+
+    void ApplySpeedMultiplier()
+    {
+        float mult = 1f;
+        if (climbController != null && climbController.IsClimbing)
+            mult = playerAnimSlowMultiplier;
+
+        float baseSpeed = patrolSpeed;
+        switch (CurrentState)
+        {
+            case State.Patrol: baseSpeed = patrolSpeed; break;
+            case State.Investigate: baseSpeed = investigateWalkSpeed; break;
+            case State.Chase: baseSpeed = chaseSpeed; break;
+            case State.ChaseWindup: baseSpeed = 0f; break;
+            case State.Search: baseSpeed = investigateWalkSpeed; break;
+        }
+
+        agent.speed = baseSpeed * mult;
+    }
+
+    // --- STREFY ---
 
     bool IsPointInAnyZone(Vector3 point)
     {
         foreach (var zone in forbiddenZones)
-        {
             if (zone != null && zone.ContainsPoint(point))
                 return true;
-        }
-        return false;
-    }
-
-    // Sprawdza, czy punkt jest blisko granicy strefy (do zatrzymania siê przed wejœciem)
-    bool IsPointNearZone(Vector3 point)
-    {
-        foreach (var zone in forbiddenZones)
-        {
-            if (zone == null) continue;
-            var col = zone.GetComponent<Collider>();
-            if (col == null) continue;
-
-            Vector3 closest = col.ClosestPoint(point);
-            if (Vector3.Distance(closest, point) < forbiddenZoneMargin)
-                return true;
-        }
         return false;
     }
 
@@ -202,8 +239,6 @@ public class EnemyStalker : MonoBehaviour
             }
         }
 
-        agent.speed = patrolSpeed;
-
         if (valid.Count > 0)
         {
             PatrolPoint chosen = PickWeighted(valid);
@@ -212,7 +247,6 @@ public class EnemyStalker : MonoBehaviour
         else
         {
             PickWanderTarget();
-            agent.SetDestination(agent.destination);
         }
     }
 
@@ -239,7 +273,6 @@ public class EnemyStalker : MonoBehaviour
 
             if (Vector3.Distance(candidate, player.position) < wanderMinDistance) continue;
             if (IsPointInAnyZone(candidate)) continue;
-            if (IsPointNearZone(candidate)) continue;
 
             if (NavMesh.SamplePosition(candidate, out NavMeshHit hit, 3f, NavMesh.AllAreas))
             {
@@ -247,7 +280,6 @@ public class EnemyStalker : MonoBehaviour
                 return;
             }
         }
-        // Brak miejsca – stój
         if (agent.hasPath) agent.ResetPath();
     }
 
@@ -255,10 +287,10 @@ public class EnemyStalker : MonoBehaviour
 
     public void HearNoise(Vector3 noisePos, bool loud)
     {
-        if (CurrentState == State.Chase || CurrentState == State.BlockedByZone) return;
+        if (CurrentState == State.Chase || CurrentState == State.ChaseWindup || CurrentState == State.BlockedByZone) return;
         if (enemyAttack != null && enemyAttack.IsStunned) return;
         if (Vector3.Distance(transform.position, noisePos) > hearingRadius) return;
-        if (IsPointInAnyZone(noisePos)) return; // dŸwiêk z wnêtrza strefy ignorujemy
+        if (IsPointInAnyZone(noisePos)) return;
 
         lastKnownPlayerPos = noisePos;
         EnterInvestigate(noisePos, loud ? investigateTimeLoud : investigateTimeLight,
@@ -271,21 +303,16 @@ public class EnemyStalker : MonoBehaviour
         stateTimer = 0f;
         investigateTarget = target;
         investigateDuration = duration;
-        agent.speed = speed;
 
-        // ZnajdŸ bezpieczny punkt na granicy strefy, jeœli target jest w strefie
         Vector3 safeTarget = target;
         if (IsPointInAnyZone(target))
-        {
-            // Cofnij siê – idŸ do najbli¿szego punktu na zewn¹trz
             safeTarget = FindSafePointOutsideZones(target);
-        }
+
         agent.SetDestination(safeTarget);
     }
 
     Vector3 FindSafePointOutsideZones(Vector3 inside)
     {
-        // Szukaj punktu na zewn¹trz stref, w stronê od gracza do przeciwnika
         Vector3 dir = (transform.position - player.position).normalized;
         for (int i = 1; i <= 10; i++)
         {
@@ -312,15 +339,8 @@ public class EnemyStalker : MonoBehaviour
 
     // --- CHASE ---
 
-    void EnterChase()
-    {
-        CurrentState = State.Chase;
-        agent.speed = chaseSpeed;
-    }
-
     void UpdateChase()
     {
-        // Jeœli gracz wszed³ w strefê – przerwij poœcig
         if (IsPointInAnyZone(player.position))
         {
             CurrentState = State.BlockedByZone;
@@ -335,7 +355,6 @@ public class EnemyStalker : MonoBehaviour
         {
             CurrentState = State.Search;
             stateTimer = 0f;
-            agent.speed = investigateWalkSpeed;
             agent.SetDestination(lastKnownPlayerPos);
         }
     }

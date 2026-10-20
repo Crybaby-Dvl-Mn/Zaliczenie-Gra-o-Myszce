@@ -3,23 +3,35 @@ using UnityEngine;
 [RequireComponent(typeof(CharacterController))]
 public class PlayerController : MonoBehaviour
 {
-    [Header("Prêdkoœci – CHÓD")]
-    public float walkForward = 3f;        // W
-    public float walkBackward = 1.8f;     // S (wolniej – horror)
-    public float walkStrafe = 2.2f;       // A / D (wolniej)
+    [Header("Prêdkoœci – CHÓD (domyœlne)")]
+    public float walkForward = 3f;
+    public float walkBackward = 1.8f;
+    public float walkStrafe = 2.2f;
 
     [Header("Prêdkoœci – BIEG (Shift)")]
-    public float sprintForward = 6f;      // W + Shift
-    public float sprintBackward = 3.5f;   // S + Shift
-    public float sprintStrafe = 4.5f;     // A/D + Shift
+    public float sprintForward = 6f;
+    public float sprintBackward = 3.5f;
+    public float sprintStrafe = 4.5f;
+
+    [Header("Prêdkoœci – KUCANIE (Ctrl)")]
+    public float crouchForward = 1.8f;
+    public float crouchBackward = 1.2f;
+    public float crouchStrafe = 1.5f;
 
     [Header("P³ynnoœæ ruchu")]
-    public float acceleration = 8f;       // jak szybko nabiera prêdkoœci
-    public float rotationSpeed = 10f;     // szybkoœæ obrotu postaci
+    public float acceleration = 8f;
+    public float rotationSpeed = 10f;
 
     [Header("Start sprintu")]
-    [Tooltip("Jak d³ugo gracz rozpêdza siê, zanim osi¹gnie pe³n¹ prêdkoœæ biegu")]
     public float sprintSpinUpTime = 0.5f;
+
+    [Header("Wysokoœci CharacterControllera")]
+    [Tooltip("Wysokoœæ podczas biegu (nadpisuje domyœln¹ z CharacterControllera)")]
+    public float sprintHeight = 1.7f;
+    [Tooltip("Wysokoœæ podczas kucania (nadpisuje domyœln¹ z CharacterControllera)")]
+    public float crouchHeight = 1.2f;
+    [Tooltip("Jak szybko collider zmienia wysokoœæ")]
+    public float heightChangeSpeed = 10f;
 
     [Header("Referencje")]
     public Transform cameraTransform;
@@ -28,9 +40,16 @@ public class PlayerController : MonoBehaviour
     private CharacterController controller;
     private Vector3 currentVelocity;
     private bool isSprinting;
+    private bool isCrouching;
     private float sprintSpinUpTimer;
+    private float targetHeight;
+
+    // Domyœlna wysokoœæ – brana z CharacterControllera w Awake
+    private float standHeight;
+    private Vector3 standCenter;
 
     public bool IsSprintActive => isSprinting;
+    public bool IsCrouching => isCrouching;
 
     void Awake()
     {
@@ -40,13 +59,20 @@ public class PlayerController : MonoBehaviour
             cameraRig = cameraTransform.GetComponent<CameraRig>();
 
         if (cameraRig == null)
-            cameraRig = FindObjectOfType<CameraRig>();
+            cameraRig = FindFirstObjectByType<CameraRig>();
+
+        // Zapamiêtaj domyœln¹ wysokoœæ i center z CharacterControllera
+        standHeight = controller.height;
+        standCenter = controller.center;
+        targetHeight = standHeight;
     }
 
     void Update()
     {
         HandleMovement();
         HandleSprintState();
+        HandleCrouchState();
+        HandleHeight();
     }
 
     void HandleMovement()
@@ -54,13 +80,11 @@ public class PlayerController : MonoBehaviour
         float h = Input.GetAxisRaw("Horizontal");
         float v = Input.GetAxisRaw("Vertical");
 
-        // Yaw kamery – kierunek ruchu zgodny z patrzeniem
         float yaw = cameraRig != null ? cameraRig.CurrentYaw : 0f;
         Quaternion yawRot = Quaternion.Euler(0f, yaw, 0f);
         Vector3 forward = yawRot * Vector3.forward;
         Vector3 right = yawRot * Vector3.right;
 
-        // --- Postêp rozpêdzania sprintu (0 = chód, 1 = pe³ny bieg) ---
         float sprintProgress = 0f;
         if (isSprinting)
         {
@@ -70,12 +94,27 @@ public class PlayerController : MonoBehaviour
                 sprintProgress = 1f;
         }
 
-        // --- Prêdkoœæ zale¿na od kierunku i trybu ---
-        float forwardSpeed = Mathf.Lerp(walkForward, sprintForward, sprintProgress);
-        float backwardSpeed = Mathf.Lerp(walkBackward, sprintBackward, sprintProgress);
-        float strafeSpeed = Mathf.Lerp(walkStrafe, sprintStrafe, sprintProgress);
+        float forwardSpeed, backwardSpeed, strafeSpeed;
 
-        // Rozdzielamy sk³adowe: przód/ty³ (v) i boki (h)
+        if (isCrouching)
+        {
+            forwardSpeed = crouchForward;
+            backwardSpeed = crouchBackward;
+            strafeSpeed = crouchStrafe;
+        }
+        else if (isSprinting)
+        {
+            forwardSpeed = Mathf.Lerp(walkForward, sprintForward, sprintProgress);
+            backwardSpeed = Mathf.Lerp(walkBackward, sprintBackward, sprintProgress);
+            strafeSpeed = Mathf.Lerp(walkStrafe, sprintStrafe, sprintProgress);
+        }
+        else
+        {
+            forwardSpeed = walkForward;
+            backwardSpeed = walkBackward;
+            strafeSpeed = walkStrafe;
+        }
+
         Vector3 moveDir = Vector3.zero;
 
         if (Mathf.Abs(v) > 0.01f)
@@ -89,19 +128,15 @@ public class PlayerController : MonoBehaviour
             moveDir += right * h * strafeSpeed;
         }
 
-        // Normalizacja tylko wtedy, gdy idziemy po skosie (¿eby nie sumowaæ prêdkoœci)
         Vector3 targetVel = moveDir.magnitude > 0.01f
             ? Vector3.ClampMagnitude(moveDir, Mathf.Max(forwardSpeed, strafeSpeed, backwardSpeed))
             : Vector3.zero;
 
-        // --- P³ynne przyspieszanie (tylko XZ, Y – grawitacja) ---
         Vector3 horizontalVel = new Vector3(currentVelocity.x, 0f, currentVelocity.z);
         horizontalVel = Vector3.Lerp(horizontalVel, targetVel, acceleration * Time.deltaTime);
         currentVelocity.x = horizontalVel.x;
         currentVelocity.z = horizontalVel.z;
 
-        // --- Obrót postaci w kierunku ruchu (bez obrotu przy cofaniu!) ---
-        // Chcemy, ¿eby cofaj¹c gracz patrzy³ nadal do przodu – dlatego ignorujemy S przy obrocie.
         Vector3 lookDir = Vector3.zero;
         if (Mathf.Abs(h) > 0.01f || v > 0.01f)
         {
@@ -114,7 +149,6 @@ public class PlayerController : MonoBehaviour
             transform.rotation = Quaternion.Slerp(transform.rotation, targetRot, rotationSpeed * Time.deltaTime);
         }
 
-        // --- Grawitacja ---
         if (!controller.isGrounded)
             currentVelocity.y -= 9.81f;
         else
@@ -125,6 +159,13 @@ public class PlayerController : MonoBehaviour
 
     void HandleSprintState()
     {
+        if (isCrouching)
+        {
+            isSprinting = false;
+            sprintSpinUpTimer = 0f;
+            return;
+        }
+
         bool sprintHeld = Input.GetKey(KeyCode.LeftShift);
         bool hasMoveInput = Mathf.Abs(Input.GetAxisRaw("Horizontal")) > 0.01f
                          || Mathf.Abs(Input.GetAxisRaw("Vertical")) > 0.01f;
@@ -144,5 +185,45 @@ public class PlayerController : MonoBehaviour
 
         if (sprintSpinUpTimer > 0f)
             sprintSpinUpTimer -= Time.deltaTime;
+    }
+
+    void HandleCrouchState()
+    {
+        bool crouchHeld = Input.GetKey(KeyCode.LeftControl);
+
+        if (crouchHeld && !isCrouching)
+        {
+            isCrouching = true;
+            isSprinting = false;
+            sprintSpinUpTimer = 0f;
+        }
+        else if (!crouchHeld && isCrouching)
+        {
+            isCrouching = false;
+        }
+    }
+
+    void HandleHeight()
+    {
+        // Docelowa wysokoœæ: kucanie > bieg > domyœlna (z CharacterControllera)
+        if (isCrouching)
+            targetHeight = crouchHeight;
+        else if (isSprinting)
+            targetHeight = sprintHeight;
+        else
+            targetHeight = standHeight;
+
+        float newHeight = Mathf.Lerp(controller.height, targetHeight, heightChangeSpeed * Time.deltaTime);
+        controller.height = newHeight;
+
+        // Center: przy domyœlnej wysokoœci wracamy do standCenter, przy innych – height/2
+        if (Mathf.Approximately(targetHeight, standHeight))
+        {
+            controller.center = Vector3.Lerp(controller.center, standCenter, heightChangeSpeed * Time.deltaTime);
+        }
+        else
+        {
+            controller.center = new Vector3(0f, newHeight * 0.5f, 0f);
+        }
     }
 }

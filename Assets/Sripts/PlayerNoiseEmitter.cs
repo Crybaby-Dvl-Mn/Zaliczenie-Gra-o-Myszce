@@ -10,6 +10,10 @@ public class PlayerNoiseEmitter : MonoBehaviour
     public float sprintNoiseInterval = 0.4f;
     public float sprintNoiseRadius = 14f;
 
+    [Header("DŸwiêk – KUCANIE (cichy)")]
+    public float crouchNoiseInterval = 2.0f;
+    public float crouchNoiseRadius = 3f;
+
     [Header("DŸwiêk – INTERAKCJA (g³oœny, jednorazowy)")]
     public float interactionNoiseRadius = 10f;
 
@@ -37,24 +41,37 @@ public class PlayerNoiseEmitter : MonoBehaviour
 
         noiseTimer += Time.deltaTime;
 
-        bool sprinting = playerController.IsSprintActive;
-        float interval = sprinting ? sprintNoiseInterval : walkNoiseInterval;
-        float radius = sprinting ? sprintNoiseRadius : walkNoiseRadius;
+        float interval, radius;
+
+        if (playerController.IsCrouching)
+        {
+            interval = crouchNoiseInterval;
+            radius = crouchNoiseRadius;
+        }
+        else if (playerController.IsSprintActive)
+        {
+            interval = sprintNoiseInterval;
+            radius = sprintNoiseRadius;
+        }
+        else
+        {
+            interval = walkNoiseInterval;
+            radius = walkNoiseRadius;
+        }
 
         if (noiseTimer >= interval)
         {
             noiseTimer = 0f;
-            EmitNoise(radius, sprinting);
+            EmitNoise(radius);
         }
     }
 
-    // Wywo³aj to przy interakcji (np. otwieranie drzwi, podnoszenie przedmiotu)
     public void EmitInteractionNoise()
     {
-        EmitNoise(interactionNoiseRadius, true);
+        EmitNoise(interactionNoiseRadius);
     }
 
-    void EmitNoise(float radius, bool loud)
+    void EmitNoise(float radius)
     {
         Collider[] hits = Physics.OverlapSphere(transform.position, radius);
         foreach (var hit in hits)
@@ -62,6 +79,7 @@ public class PlayerNoiseEmitter : MonoBehaviour
             var enemy = hit.GetComponent<EnemyStalker>();
             if (enemy != null)
             {
+                bool loud = radius >= sprintNoiseRadius;
                 enemy.HearNoise(transform.position, loud);
             }
         }
@@ -73,6 +91,8 @@ public class PlayerNoiseEmitter : MonoBehaviour
         Gizmos.DrawWireSphere(transform.position, walkNoiseRadius);
         Gizmos.color = Color.red;
         Gizmos.DrawWireSphere(transform.position, sprintNoiseRadius);
+        Gizmos.color = Color.cyan;
+        Gizmos.DrawWireSphere(transform.position, crouchNoiseRadius);
         Gizmos.color = Color.yellow;
         Gizmos.DrawWireSphere(transform.position, interactionNoiseRadius);
     }

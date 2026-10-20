@@ -14,6 +14,10 @@ public class ClimbController : MonoBehaviour
     [Tooltip("Jak daleko w dó³ raycast szuka powierzchni")]
     public float landingRayDistance = 10f;
 
+    [Header("Przywracanie collidera podczas wspinaczki")]
+    [Tooltip("Wysokoœæ collidera podczas wspinaczki (zawsze taka sama, niezale¿nie od trybu)")]
+    public float climbHeight = 2.0f;
+
     public bool IsClimbing { get; private set; }
 
     private CharacterController controller;
@@ -26,6 +30,7 @@ public class ClimbController : MonoBehaviour
     private float wallCheckDistance;
 
     private Vector3 climbDirection;
+    private Vector3 objectCenter;
     private float startY;
 
     private enum ClimbPhase { None, Rotating, Climbing, Stepping }
@@ -40,9 +45,14 @@ public class ClimbController : MonoBehaviour
         cameraRig = FindFirstObjectByType<CameraRig>();
     }
 
-    public void StartClimb(float maxHeight, float speed, float fwdStep, float wallDist, Vector3 targetDirection)
+    public void StartClimb(float maxHeight, float speed, float fwdStep, float wallDist,
+                           Vector3 targetDirection, Vector3 targetObjectCenter)
     {
         if (IsClimbing) return;
+
+        // Przywróæ normaln¹ wysokoœæ collidera na czas wspinaczki
+        controller.height = climbHeight;
+        controller.center = new Vector3(0f, climbHeight * 0.5f, 0f);
 
         maxClimbHeight = maxHeight;
         climbSpeed = speed;
@@ -54,6 +64,8 @@ public class ClimbController : MonoBehaviour
         if (climbDirection.sqrMagnitude < 0.001f)
             climbDirection = transform.forward;
         climbDirection.Normalize();
+
+        objectCenter = targetObjectCenter;
 
         startY = transform.position.y;
         stepProgress = 0f;
@@ -68,7 +80,7 @@ public class ClimbController : MonoBehaviour
         phase = ClimbPhase.Rotating;
 
         if (debugLogs)
-            Debug.Log($"[Climb] StartClimb | dir: {climbDirection} | startY: {startY:F2}");
+            Debug.Log($"[Climb] StartClimb | dir: {climbDirection} | objectCenter: {objectCenter} | startY: {startY:F2}");
     }
 
     void Update()
@@ -141,27 +153,39 @@ public class ClimbController : MonoBehaviour
 
         if (stepProgress >= forwardStep - 0.01f)
         {
+            AlignToObjectCenter();
             SnapToTopSurface();
             FinishClimb();
         }
     }
 
+    void AlignToObjectCenter()
+    {
+        // Wyrównanie X i Z do œrodka obiektu – ¿eby gracz nie l¹dowa³ na krawêdzi
+        Vector3 newPos = transform.position;
+        newPos.x = objectCenter.x;
+        newPos.z = objectCenter.z;
+
+        controller.enabled = false;
+        transform.position = newPos;
+        controller.enabled = true;
+
+        if (debugLogs)
+            Debug.Log($"[Climb] AlignToObjectCenter | newPos: {newPos}");
+    }
+
     void SnapToTopSurface()
     {
-        // Raycast w dó³ z punktu nad graczem – szukamy górnej powierzchni obiektu
         Vector3 rayStart = transform.position + Vector3.up * landingRayStartHeight;
 
         if (Physics.Raycast(rayStart, Vector3.down, out RaycastHit hit, landingRayDistance))
         {
-            // Chcemy, ¿eby DÓ£ CharacterControllera by³ na powierzchni + margines
-            // Œrodek CC jest na transform.position, wiêc dolna krawêdŸ = transform.position.y - (height/2)
             float halfHeight = controller.height * 0.5f;
             float targetY = hit.point.y + halfHeight + landingMargin;
 
             Vector3 newPos = transform.position;
             newPos.y = targetY;
 
-            // Wy³¹czamy CC na chwilê, ¿eby teleport zadzia³a³ natychmiast
             controller.enabled = false;
             transform.position = newPos;
             controller.enabled = true;
