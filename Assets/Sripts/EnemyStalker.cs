@@ -25,8 +25,10 @@ public class EnemyStalker : MonoBehaviour
     public float chaseSpeed = 5.5f;
     public float chaseGiveUpRadius = 20f;
 
+    [Header("Spowolnienie w poœcigu (gdy przenika przez Climbable)")]
+    public float chaseSlowMultiplier = 0.6f;
+
     [Header("OpóŸnienie wejœcia w Chase")]
-    [Tooltip("Ile sekund przeciwnik stoi w miejscu po wykryciu gracza, zanim zacznie biec")]
     public float chaseWindupTime = 5f;
 
     [Header("Prêdkoœci – investigate")]
@@ -56,6 +58,10 @@ public class EnemyStalker : MonoBehaviour
 
     private float chaseWindupTimer;
 
+    // Tymczasowe spowolnienie (np. po teleporcie)
+    private float tempSlowTimer = 0f;
+    private float tempSlowMultiplier = 1f;
+
     void Start()
     {
         agent = GetComponent<NavMeshAgent>();
@@ -80,7 +86,14 @@ public class EnemyStalker : MonoBehaviour
     {
         if (player == null) return;
 
-        // OG£USZENIE
+        // Odliczanie tymczasowego spowolnienia
+        if (tempSlowTimer > 0f)
+        {
+            tempSlowTimer -= Time.deltaTime;
+            if (tempSlowTimer <= 0f)
+                tempSlowMultiplier = 1f;
+        }
+
         if (enemyAttack != null && enemyAttack.IsStunned)
         {
             if (agent.hasPath) agent.ResetPath();
@@ -123,14 +136,12 @@ public class EnemyStalker : MonoBehaviour
             }
         }
 
-        // Detekcja Chase
         if (!playerInForbidden && distToPlayer <= chaseRadius &&
             CurrentState != State.Chase && CurrentState != State.ChaseWindup)
         {
             EnterChaseWindup();
         }
 
-        // Zapach
         if (!playerInForbidden && CurrentState != State.Chase && CurrentState != State.ChaseWindup &&
             distToPlayer <= smellRadius)
         {
@@ -152,7 +163,28 @@ public class EnemyStalker : MonoBehaviour
         }
     }
 
-    // --- CHASE WINDUP (5 s stania przed biegiem) ---
+    // --- PUBLICZNE METODY DLA TeleportPoint ---
+
+    public void TeleportTo(Vector3 position)
+    {
+        if (agent == null) return;
+
+        agent.enabled = false;
+        transform.position = position;
+        agent.enabled = true;
+
+        // Po teleporcie – kontynuuj poœcig
+        if (CurrentState == State.Chase || CurrentState == State.ChaseWindup)
+            agent.SetDestination(player.position);
+    }
+
+    public void ApplyTemporarySlow(float duration, float multiplier)
+    {
+        tempSlowTimer = duration;
+        tempSlowMultiplier = multiplier;
+    }
+
+    // --- CHASE WINDUP ---
 
     void EnterChaseWindup()
     {
@@ -165,7 +197,6 @@ public class EnemyStalker : MonoBehaviour
     {
         chaseWindupTimer -= Time.deltaTime;
 
-        // Przeciwnik stoi w miejscu, ale patrzy na gracza
         Vector3 lookTarget = new Vector3(player.position.x, transform.position.y, player.position.z);
         if (lookTarget != transform.position)
         {
@@ -174,9 +205,7 @@ public class EnemyStalker : MonoBehaviour
         }
 
         if (chaseWindupTimer <= 0f)
-        {
             CurrentState = State.Chase;
-        }
     }
 
     // --- SPOWOLNIENIE ---
@@ -184,8 +213,14 @@ public class EnemyStalker : MonoBehaviour
     void ApplySpeedMultiplier()
     {
         float mult = 1f;
+
         if (climbController != null && climbController.IsClimbing)
-            mult = playerAnimSlowMultiplier;
+            mult *= playerAnimSlowMultiplier;
+
+        if (CurrentState == State.Chase)
+            mult *= chaseSlowMultiplier;
+
+        mult *= tempSlowMultiplier;
 
         float baseSpeed = patrolSpeed;
         switch (CurrentState)

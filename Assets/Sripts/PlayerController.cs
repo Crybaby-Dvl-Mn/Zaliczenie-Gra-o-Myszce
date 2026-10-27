@@ -26,12 +26,16 @@ public class PlayerController : MonoBehaviour
     public float sprintSpinUpTime = 0.5f;
 
     [Header("Wysokoœci CharacterControllera")]
-    [Tooltip("Wysokoœæ podczas biegu (nadpisuje domyœln¹ z CharacterControllera)")]
     public float sprintHeight = 1.7f;
-    [Tooltip("Wysokoœæ podczas kucania (nadpisuje domyœln¹ z CharacterControllera)")]
     public float crouchHeight = 1.2f;
-    [Tooltip("Jak szybko collider zmienia wysokoœæ")]
     public float heightChangeSpeed = 10f;
+
+    [Header("Wymuszone kucanie (brak miejsca na wstanie)")]
+    public LayerMask ceilingMask = ~0;
+    public float ceilingCheckMargin = 0.1f;
+
+    [Header("Debug")]
+    public bool debugLogs = true;
 
     [Header("Referencje")]
     public Transform cameraTransform;
@@ -42,14 +46,14 @@ public class PlayerController : MonoBehaviour
     private bool isSprinting;
     private bool isCrouching;
     private float sprintSpinUpTimer;
-    private float targetHeight;
 
-    // Domyœlna wysokoœæ – brana z CharacterControllera w Awake
     private float standHeight;
     private Vector3 standCenter;
 
+    private bool forcedCrouch;
+
     public bool IsSprintActive => isSprinting;
-    public bool IsCrouching => isCrouching;
+    public bool IsCrouching => isCrouching; // TYLKO isCrouching, bez forcedCrouch
 
     void Awake()
     {
@@ -61,10 +65,8 @@ public class PlayerController : MonoBehaviour
         if (cameraRig == null)
             cameraRig = FindFirstObjectByType<CameraRig>();
 
-        // Zapamiêtaj domyœln¹ wysokoœæ i center z CharacterControllera
         standHeight = controller.height;
         standCenter = controller.center;
-        targetHeight = standHeight;
     }
 
     void Update()
@@ -72,6 +74,7 @@ public class PlayerController : MonoBehaviour
         HandleMovement();
         HandleSprintState();
         HandleCrouchState();
+        HandleForcedCrouch();
         HandleHeight();
     }
 
@@ -96,7 +99,7 @@ public class PlayerController : MonoBehaviour
 
         float forwardSpeed, backwardSpeed, strafeSpeed;
 
-        if (isCrouching)
+        if (isCrouching || forcedCrouch)
         {
             forwardSpeed = crouchForward;
             backwardSpeed = crouchBackward;
@@ -159,7 +162,7 @@ public class PlayerController : MonoBehaviour
 
     void HandleSprintState()
     {
-        if (isCrouching)
+        if (isCrouching || forcedCrouch)
         {
             isSprinting = false;
             sprintSpinUpTimer = 0f;
@@ -191,6 +194,13 @@ public class PlayerController : MonoBehaviour
     {
         bool crouchHeld = Input.GetKey(KeyCode.LeftControl);
 
+        if (forcedCrouch)
+        {
+            if (crouchHeld && !isCrouching)
+                isCrouching = true;
+            return;
+        }
+
         if (crouchHeld && !isCrouching)
         {
             isCrouching = true;
@@ -203,27 +213,61 @@ public class PlayerController : MonoBehaviour
         }
     }
 
+    void HandleForcedCrouch()
+    {
+        if (!isCrouching && !forcedCrouch) return;
+
+        bool hasSpace = CanStandUp();
+
+        if (hasSpace)
+        {
+            if (!Input.GetKey(KeyCode.LeftControl))
+            {
+                forcedCrouch = false;
+                isCrouching = false;
+            }
+        }
+        else
+        {
+            forcedCrouch = true;
+            isCrouching = true;
+        }
+    }
+
+    bool CanStandUp()
+    {
+        float radius = controller.radius * 0.95f;
+        Vector3 bottom = transform.position + Vector3.up * (radius + 0.01f);
+        Vector3 top = transform.position + Vector3.up * (standHeight - radius - ceilingCheckMargin);
+
+        bool blocked = Physics.CheckCapsule(bottom, top, radius, ceilingMask, QueryTriggerInteraction.Ignore);
+
+        if (debugLogs)
+            Debug.Log($"[Player] CanStandUp: bottom={bottom}, top={top}, radius={radius}, blocked={blocked}");
+
+        return !blocked;
+    }
+
     void HandleHeight()
     {
-        // Docelowa wysokoœæ: kucanie > bieg > domyœlna (z CharacterControllera)
-        if (isCrouching)
-            targetHeight = crouchHeight;
-        else if (isSprinting)
-            targetHeight = sprintHeight;
-        else
-            targetHeight = standHeight;
+        float desiredHeight;
 
-        float newHeight = Mathf.Lerp(controller.height, targetHeight, heightChangeSpeed * Time.deltaTime);
+        if (isCrouching || forcedCrouch)
+            desiredHeight = crouchHeight;
+        else if (isSprinting)
+            desiredHeight = sprintHeight;
+        else
+            desiredHeight = standHeight;
+
+        float newHeight = Mathf.Lerp(controller.height, desiredHeight, heightChangeSpeed * Time.deltaTime);
         controller.height = newHeight;
 
-        // Center: przy domyœlnej wysokoœci wracamy do standCenter, przy innych – height/2
-        if (Mathf.Approximately(targetHeight, standHeight))
-        {
+        if (Mathf.Approximately(desiredHeight, standHeight))
             controller.center = Vector3.Lerp(controller.center, standCenter, heightChangeSpeed * Time.deltaTime);
-        }
         else
-        {
             controller.center = new Vector3(0f, newHeight * 0.5f, 0f);
-        }
+
+        if (debugLogs)
+            Debug.Log($"[Player] height: {controller.height:F2} | isSprint: {isSprinting} | isCrouch: {isCrouching} | forced: {forcedCrouch} | desired: {desiredHeight:F2}");
     }
 }

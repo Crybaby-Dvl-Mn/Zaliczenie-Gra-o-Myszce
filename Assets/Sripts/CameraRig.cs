@@ -13,6 +13,16 @@ public class CameraRig : MonoBehaviour
     public float tpsHeight = 1.5f;
     public float mouseSensitivity = 3f;
 
+    [Header("Unikanie úcian (TPS)")]
+    [Tooltip("Warstwy, ktÛre blokujπ kamerÍ (úciany, obiekty)")]
+    public LayerMask collisionMask = ~0;
+    [Tooltip("PromieÒ SphereCast ñ im wiÍkszy, tym wczeúniej kamera siÍ przybliøa")]
+    public float cameraCollisionRadius = 0.2f;
+    [Tooltip("Minimalna odleg≥oúÊ kamery od gracza, gdy jest úciana")]
+    public float minCameraDistance = 0.5f;
+    [Tooltip("Margines od úciany ñ kamera zatrzyma siÍ trochÍ przed niπ")]
+    public float collisionMargin = 0.1f;
+
     [Header("FOV")]
     public float fovTPS = 50f;
     public float fovFPS = 40f;
@@ -22,7 +32,6 @@ public class CameraRig : MonoBehaviour
     public float transitionSpeed = 5f;
     public float transitionDelay = 0.5f;
     public AnimationCurve fadeCurve = AnimationCurve.EaseInOut(0f, 1f, 1f, 0f);
-    [Tooltip("Odleg≥oúÊ od anchora, poniøej ktÛrej uznajemy, øe kamera dotar≥a")]
     public float anchorArriveThreshold = 0.1f;
 
     [Header("Anchor FPS ñ relatywny do wysokoúci collidera")]
@@ -41,8 +50,6 @@ public class CameraRig : MonoBehaviour
     public float climbTransitionSpeed = 15f;
 
     public float CurrentYaw => currentYaw;
-
-    // Flaga: kamera dotar≥a do anchora FPS
     public bool IsFPSReady { get; private set; }
 
     private float currentYaw;
@@ -149,21 +156,40 @@ public class CameraRig : MonoBehaviour
             transform.position = Vector3.Lerp(transform.position, anchorPos, transitionSpeed * Time.deltaTime);
             transform.rotation = Quaternion.Euler(0f, currentYaw, 0f);
 
-            // Sprawdü, czy kamera dotar≥a do anchora
             IsFPSReady = Vector3.Distance(transform.position, anchorPos) <= anchorArriveThreshold;
         }
         else
         {
-            // TPS (chÛd)
+            // TPS z unikaniem úcian
             Quaternion orbitRot = Quaternion.Euler(currentPitch, currentYaw, 0f);
             Vector3 offset = orbitRot * new Vector3(0f, 0f, -tpsDistance);
-            Vector3 tpsPos = player.position + Vector3.up * tpsHeight + offset;
 
-            transform.position = Vector3.Lerp(transform.position, tpsPos, transitionSpeed * 0.5f * Time.deltaTime);
+            // Punkt zaczepienia: nad graczem (np. klatka piersiowa/g≥owa)
+            Vector3 pivot = player.position + Vector3.up * tpsHeight;
 
-            Vector3 lookTarget = player.position + Vector3.up * tpsHeight;
-            Quaternion lookRot = Quaternion.LookRotation(lookTarget - transform.position);
-            transform.rotation = Quaternion.Slerp(transform.rotation, lookRot, 8f * Time.deltaTime);
+            // Docelowa pozycja kamery (bez kolizji)
+            Vector3 desiredPos = pivot + offset;
+
+            // Sprawdü, czy miÍdzy pivotem a desiredPos jest úciana
+            Vector3 dir = (desiredPos - pivot).normalized;
+            float dist = Vector3.Distance(pivot, desiredPos);
+
+            Vector3 finalPos = desiredPos;
+
+            // SphereCast ñ wykrywa úciany po drodze
+            if (Physics.SphereCast(pivot, cameraCollisionRadius, dir, out RaycastHit hit, dist, collisionMask, QueryTriggerInteraction.Ignore))
+            {
+                // Kamera zatrzymuje siÍ przed úcianπ
+                float safeDist = Mathf.Max(hit.distance - collisionMargin, minCameraDistance);
+                finalPos = pivot + dir * safeDist;
+            }
+
+            // P≥ynne przybliøanie do finalPos
+            transform.position = Vector3.Lerp(transform.position, finalPos, transitionSpeed * 2f * Time.deltaTime);
+
+            // Rotacja: patrz na pivot
+            Quaternion lookRot = Quaternion.LookRotation(pivot - transform.position);
+            transform.rotation = Quaternion.Slerp(transform.rotation, lookRot, 10f * Time.deltaTime);
 
             IsFPSReady = false;
         }
